@@ -2,6 +2,13 @@
 Search, explore and download Lossless and Hi-Res music from [Qobuz](https://www.qobuz.com/). It *just works*™ (2025).
 [![Donate](https://img.shields.io/badge/Donate-PayPal-green.svg)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=VZWSWVGZGJRMU&source=url)
 
+## Fork-Info
+This is a fork of the original qobuz-dl with some changes and added features to make it work more like I want it.
+Note that I haven't put much effort into this project and is mostly vibe-coded with AI.
+
+### Changes
+- Support for embedding cover but not saving it to disk
+
 ## Features
 
 * Download FLAC and MP3 files from Qobuz
