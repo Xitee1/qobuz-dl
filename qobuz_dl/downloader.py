@@ -101,9 +101,15 @@ class Download:
         dirn = os.path.join(self.path, sanitized_title)
         os.makedirs(dirn, exist_ok=True)
 
-        if self.no_cover:
+        # Download cover: to memory if only embedding, to disk if keeping
+        cover_image_data = None
+        if self.no_cover and not self.embed_art:
             logger.info(f"{OFF}Skipping cover")
+        elif self.no_cover and self.embed_art:
+            # Download to memory only for embedding
+            cover_image_data = _download_to_memory(meta["image"]["large"], og_quality=self.cover_og_quality)
         else:
+            # Download to disk as usual
             _get_extra(meta["image"]["large"], dirn, og_quality=self.cover_og_quality)
 
         if "goodies" in meta:
@@ -126,6 +132,7 @@ class Download:
                     False,
                     is_mp3,
                     i["media_number"] if is_multiple else None,
+                    cover_image_data,
                 )
             else:
                 logger.info(f"{OFF}Demo. Skipping")
@@ -160,9 +167,16 @@ class Download:
 
             dirn = os.path.join(self.path, sanitized_title)
             os.makedirs(dirn, exist_ok=True)
-            if self.no_cover:
+            
+            # Download cover: to memory if only embedding, to disk if keeping
+            cover_image_data = None
+            if self.no_cover and not self.embed_art:
                 logger.info(f"{OFF}Skipping cover")
+            elif self.no_cover and self.embed_art:
+                # Download to memory only for embedding
+                cover_image_data = _download_to_memory(meta["album"]["image"]["large"], og_quality=self.cover_og_quality)
             else:
+                # Download to disk as usual
                 _get_extra(
                     meta["album"]["image"]["large"],
                     dirn,
@@ -178,6 +192,7 @@ class Download:
                 True,
                 is_mp3,
                 False,
+                cover_image_data,
             )
         else:
             logger.info(f"{OFF}Demo. Skipping")
@@ -193,6 +208,7 @@ class Download:
         is_track,
         is_mp3,
         multiple=None,
+        cover_image_data=None,
     ):
         extension = ".mp3" if is_mp3 else ".flac"
 
@@ -208,7 +224,7 @@ class Download:
 
         filename = os.path.join(root_dir, f".{tmp_count:02}.tmp")
 
-        # Determine the filename
+        # Determine the filename using the path_format
         track_title = track_metadata.get("title")
         artist = _safe_get(track_metadata, "performer", "name")
         filename_attr = self._get_filename_attr(artist, track_metadata, track_title)
@@ -233,6 +249,7 @@ class Download:
                 album_or_track_metadata,
                 is_track,
                 self.embed_art,
+                cover_image_data,
             )
         except Exception as e:
             logger.error(f"{RED}Error tagging the file: {e}", exc_info=True)
@@ -358,6 +375,13 @@ def _get_extra(item, dirn, extra="cover.jpg", og_quality=False):
         extra,
     )
 
+
+def _download_to_memory(url, og_quality=False):
+    """Download image to memory (BytesIO) instead of disk."""
+    url = url.replace("_600.", "_org.") if og_quality else url
+    r = requests.get(url, allow_redirects=True)
+    r.raise_for_status()
+    return BytesIO(r.content)
 
 def _clean_format_str(folder: str, track: str, file_format: str) -> Tuple[str, str]:
     """Cleans up the format strings, avoids errors

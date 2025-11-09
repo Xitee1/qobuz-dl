@@ -63,19 +63,44 @@ def _format_genres(genres: list) -> str:
     return ", ".join(no_repeats)
 
 
-def _embed_flac_img(root_dir, audio: FLAC):
+def _embed_flac_img(root_dir, audio: FLAC, cover_data=None):
+    """Embed cover image in FLAC file from memory or disk."""
+    
+    # If cover data provided in memory, use it directly
+    if cover_data is not None:
+        try:
+            cover_data.seek(0)
+            image_bytes = cover_data.read()
+            
+            if len(image_bytes) > FLAC_MAX_BLOCKSIZE:
+                raise Exception(
+                    "downloaded cover size too large to embed. "
+                    "turn off `og_cover` to avoid error"
+                )
+            
+            image = Picture()
+            image.type = 3
+            image.mime = "image/jpeg"
+            image.desc = "cover"
+            image.data = image_bytes
+            audio.add_picture(image)
+        except Exception as e:
+            logger.error(f"Error embedding image: {e}", exc_info=True)
+        return
+    
+    # Otherwise try to read from disk
     emb_image = os.path.join(root_dir, "cover.jpg")
     multi_emb_image = os.path.join(
         os.path.abspath(os.path.join(root_dir, os.pardir)), "cover.jpg"
     )
     if os.path.isfile(emb_image):
         cover_image = emb_image
-    else:
+    elif os.path.isfile(multi_emb_image):
         cover_image = multi_emb_image
+    else:
+        return
 
     try:
-        # rest of the metadata still gets embedded
-        # when the image size is too big
         if os.path.getsize(cover_image) > FLAC_MAX_BLOCKSIZE:
             raise Exception(
                 "downloaded cover size too large to embed. "
@@ -93,15 +118,26 @@ def _embed_flac_img(root_dir, audio: FLAC):
         logger.error(f"Error embedding image: {e}", exc_info=True)
 
 
-def _embed_id3_img(root_dir, audio: id3.ID3):
+def _embed_id3_img(root_dir, audio: id3.ID3, cover_data=None):
+    """Embed cover image in MP3 file from memory or disk."""
+    
+    # If cover data provided in memory, use it directly
+    if cover_data is not None:
+        cover_data.seek(0)
+        audio.add(id3.APIC(3, "image/jpeg", 3, "", cover_data.read()))
+        return
+    
+    # Otherwise try to read from disk
     emb_image = os.path.join(root_dir, "cover.jpg")
     multi_emb_image = os.path.join(
         os.path.abspath(os.path.join(root_dir, os.pardir)), "cover.jpg"
     )
     if os.path.isfile(emb_image):
         cover_image = emb_image
-    else:
+    elif os.path.isfile(multi_emb_image):
         cover_image = multi_emb_image
+    else:
+        return
 
     with open(cover_image, "rb") as cover:
         audio.add(id3.APIC(3, "image/jpeg", 3, "", cover.read()))
@@ -109,7 +145,7 @@ def _embed_id3_img(root_dir, audio: id3.ID3):
 
 # Use KeyError catching instead of dict.get to avoid empty tags
 def tag_flac(
-    filename, root_dir, final_name, d: dict, album, istrack=True, em_image=False
+    filename, root_dir, final_name, d: dict, album, istrack=True, em_image=False, cover_data=None
 ):
     """
     Tag a FLAC file
@@ -121,6 +157,7 @@ def tag_flac(
     :param dict album: Album dictionary from Qobuz_client
     :param bool istrack
     :param bool em_image: Embed cover art into file
+    :param cover_data: BytesIO object with cover image data (optional)
     """
     audio = FLAC(filename)
 
@@ -160,13 +197,13 @@ def tag_flac(
         audio["COPYRIGHT"] = _format_copyright(album.get("copyright") or "n/a")
 
     if em_image:
-        _embed_flac_img(root_dir, audio)
+        _embed_flac_img(root_dir, audio, cover_data)
 
     audio.save()
     os.rename(filename, final_name)
 
 
-def tag_mp3(filename, root_dir, final_name, d, album, istrack=True, em_image=False):
+def tag_mp3(filename, root_dir, final_name, d, album, istrack=True, em_image=False, cover_data=None):
     """
     Tag an mp3 file
 
@@ -223,7 +260,7 @@ def tag_mp3(filename, root_dir, final_name, d, album, istrack=True, em_image=Fal
         audio[id3tag.__name__] = id3tag(encoding=3, text=v)
 
     if em_image:
-        _embed_id3_img(root_dir, audio)
+        _embed_id3_img(root_dir, audio, cover_data)
 
     audio.save(filename, "v2_version=3")
     os.rename(filename, final_name)
