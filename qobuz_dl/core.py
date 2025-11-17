@@ -147,6 +147,9 @@ class QobuzDL:
             if url_type == "playlist":
                 new_path = self.directory
                 playlist_name = content_name
+            elif url_type in ("artist", "label"):
+                new_path = self.directory
+                playlist_name = None
             else:
                 new_path = create_and_return_dir(
                     os.path.join(self.directory, sanitize_filename(content_name))
