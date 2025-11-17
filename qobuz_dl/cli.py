@@ -9,7 +9,7 @@ from qobuz_dl.bundle import Bundle
 from qobuz_dl.color import GREEN, RED, YELLOW
 from qobuz_dl.commands import qobuz_dl_args
 from qobuz_dl.core import QobuzDL
-from qobuz_dl.downloader import DEFAULT_FOLDER, DEFAULT_TRACK
+from qobuz_dl.downloader import DEFAULT_TRACK_FORMAT, DEFAULT_ALBUM_FORMAT, DEFAULT_PLAYLIST_FORMAT
 
 logging.basicConfig(
     level=logging.INFO,
@@ -56,8 +56,9 @@ def _reset_config(config_file):
     bundle = Bundle()
     config["DEFAULT"]["app_id"] = str(bundle.get_app_id())
     config["DEFAULT"]["secrets"] = ",".join(bundle.get_secrets().values())
-    config["DEFAULT"]["folder_format"] = DEFAULT_FOLDER
-    config["DEFAULT"]["track_format"] = DEFAULT_TRACK
+    config["DEFAULT"]["track_format"] = DEFAULT_TRACK_FORMAT
+    config["DEFAULT"]["album_format"] = DEFAULT_ALBUM_FORMAT
+    config["DEFAULT"]["playlist_format"] = DEFAULT_PLAYLIST_FORMAT
     config["DEFAULT"]["smart_discography"] = "false"
     with open(config_file, "w") as configfile:
         config.write(configfile)
@@ -130,8 +131,9 @@ def main():
         no_database = config.getboolean("DEFAULT", "no_database")
         app_id = config["DEFAULT"]["app_id"]
         smart_discography = config.getboolean("DEFAULT", "smart_discography")
-        folder_format = config["DEFAULT"]["folder_format"]
-        track_format = config["DEFAULT"]["track_format"]
+        track_format = config.get("DEFAULT", "track_format", fallback=DEFAULT_TRACK_FORMAT)
+        album_format = config.get("DEFAULT", "album_format", fallback=DEFAULT_ALBUM_FORMAT)
+        playlist_format = config.get("DEFAULT", "playlist_format", fallback=DEFAULT_PLAYLIST_FORMAT)
 
         secrets = [
             secret for secret in config["DEFAULT"]["secrets"].split(",") if secret
@@ -173,8 +175,9 @@ def main():
         cover_og_quality=arguments.og_cover or og_cover,
         no_cover=arguments.no_cover or no_cover,
         downloads_db=None if no_database or arguments.no_db else QOBUZ_DB,
-        folder_format=arguments.folder_format or folder_format,
         track_format=arguments.track_format or track_format,
+        album_format=arguments.album_format or album_format,
+        playlist_format=arguments.playlist_format or playlist_format,
         smart_discography=arguments.smart_discography or smart_discography,
     )
     qobuz.initialize_client(email, password, app_id, secrets)

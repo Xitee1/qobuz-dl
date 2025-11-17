@@ -103,19 +103,31 @@ def add_common_arg(custom_parser, default_folder, default_quality):
         "--no-db", action="store_true", help="don't call the database"
     )
     custom_parser.add_argument(
-        "-ff",
-        "--folder-format",
-        metavar="PATTERN",
-        help="""pattern for formatting folder names, e.g
-        "{artist} - {album} ({year})". available keys: artist,
-        albumartist, album, year, sampling_rate, bit_depth, tracktitle, version.
-        cannot contain characters used by the system, which includes /:<>""",
-    )
-    custom_parser.add_argument(
         "-tf",
         "--track-format",
         metavar="PATTERN",
-        help="pattern for formatting track names. see `folder-format`.",
+        help="""pattern for formatting single track downloads, e.g.
+        "{artist}/{tracknumber}. {tracktitle}". Supports / for subdirectories.
+        Available keys: artist, albumartist, album, year, sampling_rate, 
+        bit_depth, tracktitle, tracknumber, version.""",
+    )
+    custom_parser.add_argument(
+        "-af",
+        "--album-format",
+        metavar="PATTERN",
+        help="""pattern for formatting album downloads, e.g.
+        "{artist} - {album} ({year})/{tracknumber}. {tracktitle}". 
+        Supports / for subdirectories. Available keys: artist, albumartist, 
+        album, year, sampling_rate, bit_depth, tracktitle, tracknumber, version.""",
+    )
+    custom_parser.add_argument(
+        "-pf",
+        "--playlist-format",
+        metavar="PATTERN",
+        help="""pattern for formatting playlist downloads, e.g.
+        "{playlist}/{artist} - {tracktitle}". Supports / for subdirectories.
+        Available keys: artist, albumartist, album, year, sampling_rate, 
+        bit_depth, tracktitle, tracknumber, version, playlist.""",
     )
     # TODO: add customization options
     custom_parser.add_argument(

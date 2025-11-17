@@ -11,20 +11,10 @@ from qobuz_dl.color import OFF, GREEN, RED, YELLOW, CYAN
 from qobuz_dl.exceptions import NonStreamable
 
 QL_DOWNGRADE = "FormatRestrictedByFormatAvailability"
-# used in case of error
-DEFAULT_FORMATS = {
-    "MP3": [
-        "{artist} - {album} ({year}) [MP3]",
-        "{tracknumber}. {tracktitle}",
-    ],
-    "Unknown": [
-        "{artist} - {album}",
-        "{tracknumber}. {tracktitle}",
-    ],
-}
 
-DEFAULT_FOLDER = "{artist} - {album} ({year}) [{bit_depth}B-{sampling_rate}kHz]"
-DEFAULT_TRACK = "{tracknumber}. {tracktitle}"
+DEFAULT_TRACK_FORMAT = "{artist} - {album} - {trackname} ({year}) [{bit_depth}B-{sampling_rate}kHz]"
+DEFAULT_ALBUM_FORMAT = "{artist}/{album} ({year})/{tracknumber}. {tracktitle} [{bit_depth}B-{sampling_rate}kHz]"
+DEFAULT_PLAYLIST_FORMAT = "Playlists/{playlist}/{artist} - {album} - {trackname}"
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +31,10 @@ class Download:
         downgrade_quality: bool = False,
         cover_og_quality: bool = False,
         no_cover: bool = False,
-        folder_format=None,
-        track_format=None,
+        track_format=DEFAULT_TRACK_FORMAT,
+        album_format=DEFAULT_ALBUM_FORMAT,
+        playlist_format=DEFAULT_PLAYLIST_FORMAT,
+        playlist_name=None,
     ):
         self.client = client
         self.item_id = item_id
@@ -53,8 +45,10 @@ class Download:
         self.downgrade_quality = downgrade_quality
         self.cover_og_quality = cover_og_quality
         self.no_cover = no_cover
-        self.folder_format = folder_format or DEFAULT_FOLDER
-        self.track_format = track_format or DEFAULT_TRACK
+        self.track_format = track_format
+        self.album_format = album_format
+        self.playlist_format = playlist_format
+        self.playlist_name = playlist_name
 
     def download_id_by_type(self, track=True):
         if not track:
@@ -94,29 +88,33 @@ class Download:
         album_attr = self._get_album_attr(
             meta, album_title, file_format, bit_depth, sampling_rate
         )
-        folder_format, track_format = _clean_format_str(
-            self.folder_format, self.track_format, file_format
-        )
-        sanitized_title = sanitize_filepath(folder_format.format(**album_attr))
-        dirn = os.path.join(self.path, sanitized_title)
-        os.makedirs(dirn, exist_ok=True)
+        
+        # Add playlist name tp available attributes if downloading as part of a playlist
+        if self.playlist_name:
+            album_attr["playlist"] = sanitize_filename(self.playlist_name)
 
         # Download cover: to memory if only embedding, to disk if keeping
         cover_image_data = None
+        
         if self.no_cover and not self.embed_art:
             logger.info(f"{OFF}Skipping cover")
         elif self.no_cover and self.embed_art:
             # Download to memory only for embedding
             cover_image_data = _download_to_memory(meta["image"]["large"], og_quality=self.cover_og_quality)
         else:
-            # Download to disk as usual
-            _get_extra(meta["image"]["large"], dirn, og_quality=self.cover_og_quality)
+            # Download to disk - extract first directory from album format for cover/goodies
+            temp_format = self.album_format.split('/')[0] if '/' in self.album_format else self.album_format
+            temp_sanitized = sanitize_filepath(temp_format.format(**album_attr))
+            cover_dir = os.path.join(self.path, temp_sanitized)
+            os.makedirs(cover_dir, exist_ok=True)
+            _get_extra(meta["image"]["large"], cover_dir, og_quality=self.cover_og_quality)
+            
+            if "goodies" in meta:
+                try:
+                    _get_extra(meta["goodies"][0]["url"], cover_dir, "booklet.pdf")
+                except:  # noqa
+                    pass
 
-        if "goodies" in meta:
-            try:
-                _get_extra(meta["goodies"][0]["url"], dirn, "booklet.pdf")
-            except:  # noqa
-                pass
         media_numbers = [track["media_number"] for track in meta["tracks"]["items"]]
         is_multiple = True if len([*{*media_numbers}]) > 1 else False
         for i in meta["tracks"]["items"]:
@@ -124,7 +122,7 @@ class Download:
             if "sample" not in parse and parse["sampling_rate"]:
                 is_mp3 = True if int(self.quality) == 5 else False
                 self._download_and_tag(
-                    dirn,
+                    self.path,
                     count,
                     parse,
                     i,
@@ -133,6 +131,8 @@ class Download:
                     is_mp3,
                     i["media_number"] if is_multiple else None,
                     cover_image_data,
+                    album_attr,
+                    "album",
                 )
             else:
                 logger.info(f"{OFF}Demo. Skipping")
@@ -150,10 +150,6 @@ class Download:
             format_info = self._get_format(meta, is_track_id=True, track_url_dict=parse)
             file_format, quality_met, bit_depth, sampling_rate = format_info
 
-            folder_format, track_format = _clean_format_str(
-                self.folder_format, self.track_format, str(bit_depth)
-            )
-
             if not self.downgrade_quality and not quality_met:
                 logger.info(
                     f"{OFF}Skipping {track_title} as it doesn't "
@@ -163,10 +159,13 @@ class Download:
             track_attr = self._get_track_attr(
                 meta, track_title, bit_depth, sampling_rate
             )
-            sanitized_title = sanitize_filepath(folder_format.format(**track_attr))
-
-            dirn = os.path.join(self.path, sanitized_title)
-            os.makedirs(dirn, exist_ok=True)
+            
+            # Add playlist name if available
+            if self.playlist_name:
+                track_attr["playlist"] = sanitize_filename(self.playlist_name)
+            
+            # Determine content type and format
+            content_type = "playlist" if self.playlist_name else "track"
             
             # Download cover: to memory if only embedding, to disk if keeping
             cover_image_data = None
@@ -176,15 +175,23 @@ class Download:
                 # Download to memory only for embedding
                 cover_image_data = _download_to_memory(meta["album"]["image"]["large"], og_quality=self.cover_og_quality)
             else:
-                # Download to disk as usual
+                # Download to disk - will be placed in first directory of format
+                selected_format = self.playlist_format if self.playlist_name else self.track_format
+                temp_format = selected_format.split('/')[0] if '/' in selected_format else ""
+                if temp_format:
+                    temp_sanitized = sanitize_filepath(temp_format.format(**track_attr))
+                    cover_dir = os.path.join(self.path, temp_sanitized)
+                else:
+                    cover_dir = self.path
+                os.makedirs(cover_dir, exist_ok=True)
                 _get_extra(
                     meta["album"]["image"]["large"],
-                    dirn,
+                    cover_dir,
                     og_quality=self.cover_og_quality,
                 )
             is_mp3 = True if int(self.quality) == 5 else False
             self._download_and_tag(
-                dirn,
+                self.path,
                 1,
                 parse,
                 meta,
@@ -193,6 +200,8 @@ class Download:
                 is_mp3,
                 False,
                 cover_image_data,
+                track_attr,
+                content_type,
             )
         else:
             logger.info(f"{OFF}Demo. Skipping")
@@ -209,6 +218,8 @@ class Download:
         is_mp3,
         multiple=None,
         cover_image_data=None,
+        format_attr=None,
+        content_type="album",
     ):
         extension = ".mp3" if is_mp3 else ".flac"
 
@@ -224,26 +235,42 @@ class Download:
 
         filename = os.path.join(root_dir, f".{tmp_count:02}.tmp")
 
-        # Determine the filename using the path_format
-        track_title = track_metadata.get("title")
+        # Determine the filename using the appropriate format
+        track_title = _get_title(track_metadata)
         artist = _safe_get(track_metadata, "performer", "name")
-        filename_attr = self._get_filename_attr(artist, track_metadata, track_title)
-
-        # track_format is a format string
-        # e.g. '{tracknumber}. {artist} - {tracktitle}'
-        formatted_path = sanitize_filename(self.track_format.format(**filename_attr))
-        final_file = os.path.join(root_dir, formatted_path)[:250] + extension
+        
+        # Merge format_attr with track-specific attributes
+        if format_attr is None:
+            format_attr = {}
+        
+        filename_attr = self._get_filename_attr(artist, track_metadata, track_title, album_or_track_metadata)
+        filename_attr.update(format_attr)
+        
+        # Select the appropriate format based on content type
+        if content_type == "track":
+            format_string = self.track_format
+        elif content_type == "playlist":
+            format_string = self.playlist_format
+        else:  # album
+            format_string = self.album_format
+        
+        # Build the full path from format string
+        formatted_path = self._build_path_from_format(format_string, filename_attr, root_dir)
+        final_file = formatted_path[:250] + extension
 
         if os.path.isfile(final_file):
             logger.info(f"{OFF}{track_title} was already downloaded")
             return
 
-        tqdm_download(url, filename, filename)
+        # Ensure parent directory exists
+        os.makedirs(os.path.dirname(final_file), exist_ok=True)
+
+        tqdm_download(url, filename, track_title)
         tag_function = metadata.tag_mp3 if is_mp3 else metadata.tag_flac
         try:
             tag_function(
                 filename,
-                root_dir,
+                os.path.dirname(final_file),
                 final_file,
                 track_metadata,
                 album_or_track_metadata,
@@ -254,40 +281,86 @@ class Download:
         except Exception as e:
             logger.error(f"{RED}Error tagging the file: {e}", exc_info=True)
 
+    def _build_path_from_format(self, format_string, attributes, base_dir):
+        """Build a file path from a format string that may contain / separators."""
+        # Split by / and process each part
+        parts = format_string.split('/')
+        sanitized_parts = []
+        
+        for part in parts:
+            formatted = part.format(**attributes)
+            sanitized = sanitize_filename(formatted)
+            sanitized_parts.append(sanitized)
+        
+        # Join all parts to create the full path
+        if len(sanitized_parts) > 1:
+            # Last part is the filename (without extension)
+            dir_parts = sanitized_parts[:-1]
+            filename = sanitized_parts[-1]
+            full_dir = os.path.join(base_dir, *dir_parts)
+            os.makedirs(full_dir, exist_ok=True)
+            return os.path.join(full_dir, filename)
+        else:
+            # No subdirectories, just filename
+            return os.path.join(base_dir, sanitized_parts[0])
+
     @staticmethod
-    def _get_filename_attr(artist, track_metadata, track_title):
-        return {
-            "artist": artist,
-            "albumartist": _safe_get(
+    def _get_filename_attr(artist, track_metadata, track_title, album_or_track_metadata=None):
+        """Build comprehensive attributes for formatting."""
+        attrs = {
+            "artist": sanitize_filename(artist),
+            "albumartist": sanitize_filename(_safe_get(
                 track_metadata, "album", "artist", "name", default=artist
-            ),
-            "bit_depth": track_metadata["maximum_bit_depth"],
-            "sampling_rate": track_metadata["maximum_sampling_rate"],
-            "tracktitle": track_title,
-            "version": track_metadata.get("version"),
-            "tracknumber": f"{track_metadata['track_number']:02}",
+            )),
+            "bit_depth": track_metadata.get("maximum_bit_depth"),
+            "sampling_rate": track_metadata.get("maximum_sampling_rate"),
+            "tracktitle": sanitize_filename(track_title),
+            "version": track_metadata.get("version", ""),
+            "tracknumber": f"{track_metadata.get('track_number', 1):02}",
         }
+        
+        # Add album information if available
+        if album_or_track_metadata:
+            if "album" in track_metadata:
+                attrs["album"] = sanitize_filename(track_metadata["album"].get("title", ""))
+                attrs["year"] = track_metadata["album"].get("release_date_original", "").split("-")[0] if "release_date_original" in track_metadata["album"] else ""
+            elif "title" in album_or_track_metadata:
+                # This is album metadata itself
+                attrs["album"] = sanitize_filename(album_or_track_metadata.get("title", ""))
+                attrs["year"] = album_or_track_metadata.get("release_date_original", "").split("-")[0] if "release_date_original" in album_or_track_metadata else ""
+        
+        return attrs
 
     @staticmethod
     def _get_track_attr(meta, track_title, bit_depth, sampling_rate):
+        """Get attributes for single track formatting."""
+        artist = _safe_get(meta, "performer", "name", default="Unknown Artist")
+        album_artist = _safe_get(meta, "album", "artist", "name", default=artist)
+        
         return {
             "album": sanitize_filename(meta["album"]["title"]),
-            "artist": sanitize_filename(meta["album"]["artist"]["name"]),
-            "tracktitle": track_title,
-            "year": meta["album"]["release_date_original"].split("-")[0],
+            "artist": sanitize_filename(artist),
+            "albumartist": sanitize_filename(album_artist),
+            "tracktitle": sanitize_filename(track_title),
+            "year": meta["album"]["release_date_original"].split("-")[0] if "release_date_original" in meta["album"] else "",
             "bit_depth": bit_depth,
             "sampling_rate": sampling_rate,
+            "tracknumber": f"{meta.get('track_number', 1):02}",
+            "version": meta.get("version", ""),
         }
 
     @staticmethod
     def _get_album_attr(meta, album_title, file_format, bit_depth, sampling_rate):
+        """Get attributes for album formatting."""
         return {
             "artist": sanitize_filename(meta["artist"]["name"]),
+            "albumartist": sanitize_filename(meta["artist"]["name"]),
             "album": sanitize_filename(album_title),
-            "year": meta["release_date_original"].split("-")[0],
+            "year": meta["release_date_original"].split("-")[0] if "release_date_original" in meta else "",
             "format": file_format,
             "bit_depth": bit_depth,
             "sampling_rate": sampling_rate,
+            "version": meta.get("version", ""),
         }
 
     def _get_format(self, item_dict, is_track_id=False, track_url_dict=None):
@@ -382,32 +455,6 @@ def _download_to_memory(url, og_quality=False):
     r = requests.get(url, allow_redirects=True)
     r.raise_for_status()
     return BytesIO(r.content)
-
-def _clean_format_str(folder: str, track: str, file_format: str) -> Tuple[str, str]:
-    """Cleans up the format strings, avoids errors
-    with MP3 files.
-    """
-    final = []
-    for i, fs in enumerate((folder, track)):
-        if fs.endswith(".mp3"):
-            fs = fs[:-4]
-        elif fs.endswith(".flac"):
-            fs = fs[:-5]
-        fs = fs.strip()
-
-        # default to pre-chosen string if format is invalid
-        if file_format in ("MP3", "Unknown") and (
-            "bit_depth" in fs or "sampling_rate" in fs
-        ):
-            default = DEFAULT_FORMATS[file_format][i]
-            logger.error(
-                f"{RED}invalid format string for format {file_format}"
-                f". defaulting to {default}"
-            )
-            fs = default
-        final.append(fs)
-
-    return tuple(final)
 
 
 def _safe_get(d: dict, *keys, default=None):

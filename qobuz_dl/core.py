@@ -9,6 +9,7 @@ from pathvalidate import sanitize_filename
 from qobuz_dl.bundle import Bundle
 from qobuz_dl import downloader, qopy
 from qobuz_dl.color import CYAN, OFF, RED, YELLOW, DF, RESET
+from qobuz_dl.downloader import DEFAULT_TRACK_FORMAT, DEFAULT_ALBUM_FORMAT, DEFAULT_PLAYLIST_FORMAT
 from qobuz_dl.exceptions import NonStreamable
 from qobuz_dl.db import create_db, handle_download_id
 from qobuz_dl.utils import (
@@ -48,9 +49,9 @@ class QobuzDL:
         cover_og_quality=False,
         no_cover=False,
         downloads_db=None,
-        folder_format="{artist} - {album} ({year}) [{bit_depth}B-"
-        "{sampling_rate}kHz]",
-        track_format="{tracknumber}. {tracktitle}",
+        track_format=DEFAULT_TRACK_FORMAT,
+        album_format=DEFAULT_ALBUM_FORMAT,
+        playlist_format=DEFAULT_PLAYLIST_FORMAT,
         smart_discography=False,
     ):
         self.directory = create_and_return_dir(directory)
@@ -65,8 +66,9 @@ class QobuzDL:
         self.cover_og_quality = cover_og_quality
         self.no_cover = no_cover
         self.downloads_db = create_db(downloads_db) if downloads_db else None
-        self.folder_format = folder_format
         self.track_format = track_format
+        self.album_format = album_format
+        self.playlist_format = playlist_format
         self.smart_discography = smart_discography
 
     def initialize_client(self, email, pwd, app_id, secrets):
@@ -80,7 +82,7 @@ class QobuzDL:
             secret for secret in bundle.get_secrets().values() if secret
         ]  # avoid empty fields
 
-    def download_from_id(self, item_id, album=True, alt_path=None):
+    def download_from_id(self, item_id, album=True, alt_path=None, playlist_name=None):
         if handle_download_id(self.downloads_db, item_id, add_id=False):
             logger.info(
                 f"{OFF}This release ID ({item_id}) was already downloaded "
@@ -90,17 +92,19 @@ class QobuzDL:
             return
         try:
             dloader = downloader.Download(
-                self.client,
-                item_id,
-                alt_path or self.directory,
-                int(self.quality),
-                self.embed_art,
-                self.ignore_singles_eps,
-                self.quality_fallback,
-                self.cover_og_quality,
-                self.no_cover,
-                self.folder_format,
-                self.track_format,
+                client=self.client,
+                item_id=item_id,
+                path=alt_path or self.directory,
+                quality=int(self.quality),
+                embed_art=self.embed_art,
+                albums_only=self.ignore_singles_eps,
+                downgrade_quality=self.quality_fallback,
+                cover_og_quality=self.cover_og_quality,
+                no_cover=self.no_cover,
+                track_format=self.track_format,
+                album_format=self.album_format,
+                playlist_format=self.playlist_format,
+                playlist_name=playlist_name,
             )
             dloader.download_id_by_type(not album)
             handle_download_id(self.downloads_db, item_id, add_id=True)
@@ -139,9 +143,15 @@ class QobuzDL:
                 f"{YELLOW}Downloading all the music from {content_name} "
                 f"({url_type})!"
             )
-            new_path = create_and_return_dir(
-                os.path.join(self.directory, sanitize_filename(content_name))
-            )
+
+            if url_type == "playlist":
+                new_path = self.directory
+                playlist_name = content_name
+            else:
+                new_path = create_and_return_dir(
+                    os.path.join(self.directory, sanitize_filename(content_name))
+                )
+                playlist_name = None
 
             if self.smart_discography and url_type == "artist":
                 # change `save_space` and `skip_extras` for customization
@@ -161,9 +171,13 @@ class QobuzDL:
                     item["id"],
                     True if type_dict["iterable_key"] == "albums" else False,
                     new_path,
+                    playlist_name=playlist_name,
                 )
             if url_type == "playlist" and not self.no_m3u_for_playlists:
-                make_m3u(new_path)
+                # Extract the first directory from playlist format for m3u location
+                playlist_dir_part = self.playlist_format.split('/')[0] if '/' in self.playlist_format else content_name
+                m3u_directory = os.path.join(self.directory, sanitize_filename(playlist_dir_part.format(playlist=content_name)))
+                make_m3u(m3u_directory)
         else:
             self.download_from_id(item_id, type_dict["album"])
 
@@ -383,7 +397,6 @@ class QobuzDL:
             return
 
         pl_title = sanitize_filename(soup.select_one("h1").text)
-        pl_directory = os.path.join(self.directory, pl_title)
         logger.info(
             f"{YELLOW}Downloading playlist: {pl_title} " f"({len(track_list)} tracks)"
         )
@@ -393,7 +406,10 @@ class QobuzDL:
                 1
             ]
             if track_id:
-                self.download_from_id(track_id, False, pl_directory)
+                self.download_from_id(track_id, False, self.directory, playlist_name=pl_title)
 
         if not self.no_m3u_for_playlists:
+            # Extract the first directory from playlist format for m3u location
+            playlist_dir_part = self.playlist_format.split('/')[0] if '/' in self.playlist_format else pl_title
+            pl_directory = os.path.join(self.directory, sanitize_filename(playlist_dir_part.format(playlist=pl_title)))
             make_m3u(pl_directory)
