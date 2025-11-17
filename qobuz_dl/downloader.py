@@ -14,7 +14,7 @@ from qobuz_dl.exceptions import NonStreamable
 QL_DOWNGRADE = "FormatRestrictedByFormatAvailability"
 
 DEFAULT_TRACK_FORMAT = "{artist} - {album} - {trackname} ({year}) [{bit_depth}B-{sampling_rate}kHz]"
-DEFAULT_ALBUM_FORMAT = "{artist}/{album} ({year})/{tracknumber}. {tracktitle} [{bit_depth}B-{sampling_rate}kHz]"
+DEFAULT_ALBUM_FORMAT = "{artist}/{album} ({year})/{disc}/{tracknumber}. {tracktitle} [{bit_depth}B-{sampling_rate}kHz]"
 DEFAULT_PLAYLIST_FORMAT = "Playlists/{playlist}/{artist} - {album} - {trackname}"
 
 logger = logging.getLogger(__name__)
@@ -230,10 +230,6 @@ class Download:
             logger.info(f"{OFF}Track not available for download")
             return
 
-        if multiple:
-            root_dir = os.path.join(root_dir, f"Disc {multiple}")
-            os.makedirs(root_dir, exist_ok=True)
-
         filename = os.path.join(root_dir, f".{tmp_count:02}.tmp")
 
         # Determine the filename using the appropriate format
@@ -244,8 +240,11 @@ class Download:
         if format_attr is None:
             format_attr = {}
         
-        filename_attr = self._get_filename_attr(artist, track_metadata, track_title, album_or_track_metadata)
+        filename_attr = self._get_filename_attr(artist, track_metadata, track_title, album_or_track_metadata, multiple)
+        # Preserve the disc value from filename_attr
+        disc_value = filename_attr.get("disc", "")
         filename_attr.update(format_attr)
+        filename_attr["disc"] = disc_value
         
         # Select the appropriate format based on content type
         if content_type == "track":
@@ -284,14 +283,22 @@ class Download:
 
     def _build_path_from_format(self, format_string, attributes, base_dir):
         """Build a file path from a format string that may contain / separators."""
-        # Split by / and process each part
-        parts = format_string.split('/')
+        # Format the string first, then split by / 
+        formatted_string = format_string.format(**attributes)
+        
+        # Clean up double slashes that occur due to empty attributes
+        while '//' in formatted_string:
+            formatted_string = formatted_string.replace('//', '/')
+        
+        # Split by / and sanitize each part
+        parts = formatted_string.split('/')
         sanitized_parts = []
         
         for part in parts:
-            formatted = part.format(**attributes)
-            sanitized = sanitize_filename(formatted)
-            sanitized_parts.append(sanitized)
+            # Skip empty parts
+            if part.strip():
+                sanitized = sanitize_filename(part)
+                sanitized_parts.append(sanitized)
         
         # Join all parts to create the full path
         if len(sanitized_parts) > 1:
@@ -306,7 +313,7 @@ class Download:
             return os.path.join(base_dir, sanitized_parts[0])
 
     @staticmethod
-    def _get_filename_attr(artist, track_metadata, track_title, album_or_track_metadata=None):
+    def _get_filename_attr(artist, track_metadata, track_title, album_or_track_metadata=None, disc_number=None):
         """Build comprehensive attributes for formatting."""
         attrs = {
             "artist": sanitize_filename(artist),
@@ -318,6 +325,7 @@ class Download:
             "tracktitle": sanitize_filename(track_title),
             "version": track_metadata.get("version", ""),
             "tracknumber": f"{track_metadata.get('track_number', 1):02}",
+            "disc": f"Disc {disc_number}/" if disc_number else "",
         }
         
         # Add album information if available
@@ -348,6 +356,7 @@ class Download:
             "sampling_rate": sampling_rate,
             "tracknumber": f"{meta.get('track_number', 1):02}",
             "version": meta.get("version", ""),
+            "disc": "",
         }
 
     @staticmethod
@@ -362,6 +371,7 @@ class Download:
             "bit_depth": bit_depth,
             "sampling_rate": sampling_rate,
             "version": meta.get("version", ""),
+            "disc": "",
         }
 
     def _get_format(self, item_dict, is_track_id=False, track_url_dict=None):
